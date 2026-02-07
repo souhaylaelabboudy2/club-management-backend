@@ -16,10 +16,12 @@ COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
 WORKDIR /app
 
-COPY . .
+
+COPY composer.json composer.lock ./
+
 
 RUN composer install --no-dev --optimize-autoloader --no-interaction --no-scripts
-
+COPY . .
 RUN php artisan package:discover --ansi
 
 RUN chmod -R 775 storage bootstrap/cache
