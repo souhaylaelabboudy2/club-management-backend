@@ -15,6 +15,23 @@ use Illuminate\Support\Facades\Hash;
 class MemberController extends Controller
 {
     /**
+     * Helper function to generate full image URLs
+     */
+    private function getFullImageUrl($path)
+    {
+        if (!$path) {
+            return null;
+        }
+        
+        if (str_starts_with($path, 'http')) {
+            return $path;
+        }
+        
+        // Use url() instead of asset() for consistency
+        return url('storage/' . $path);
+    }
+
+    /**
      * Get all members using JOIN (optionally filtered)
      */
    public function index(Request $request)
@@ -46,7 +63,6 @@ class MemberController extends Controller
             $query->where('club_members.club_id', $request->club_id);
         }
 
-        // Add this filter
         if ($request->has('person_id')) {
             $query->where('club_members.person_id', $request->person_id);
         }
@@ -61,10 +77,10 @@ class MemberController extends Controller
 
         $members = $query->get();
         
-        // Add full URLs for images
+        // FIXED: Use consistent URL generation method
         $members = $members->map(function($member) {
-            $member->avatar_url = $member->avatar ? asset('storage/' . $member->avatar) : null;
-            $member->club_logo_url = $member->club_logo ? asset('storage/' . $member->club_logo) : null;
+            $member->avatar_url = $this->getFullImageUrl($member->avatar);
+            $member->club_logo_url = $this->getFullImageUrl($member->club_logo);
             return $member;
         });
 
@@ -170,9 +186,9 @@ public function store(Request $request)
             )
             ->first();
         
-        // Add full URLs
-        $membership->avatar_url = $membership->avatar ? asset('storage/' . $membership->avatar) : null;
-        $membership->club_logo_url = $membership->club_logo ? asset('storage/' . $membership->club_logo) : null;
+        // FIXED: Use consistent URL generation
+        $membership->avatar_url = $this->getFullImageUrl($membership->avatar);
+        $membership->club_logo_url = $this->getFullImageUrl($membership->club_logo);
 
         return response()->json([
             'message' => 'Membre ajouté avec succès',
@@ -231,8 +247,9 @@ private function generateTemporaryPassword()
                 ], 404);
             }
             
-            $membership->avatar_url = $membership->avatar ? asset('storage/' . $membership->avatar) : null;
-            $membership->club_logo_url = $membership->club_logo ? asset('storage/' . $membership->club_logo) : null;
+            // FIXED: Use consistent URL generation
+            $membership->avatar_url = $this->getFullImageUrl($membership->avatar);
+            $membership->club_logo_url = $this->getFullImageUrl($membership->club_logo);
 
             return response()->json($membership, 200);
         } catch (\Exception $e) {
@@ -306,8 +323,9 @@ private function generateTemporaryPassword()
                 )
                 ->first();
             
-            $updated->avatar_url = $updated->avatar ? asset('storage/' . $updated->avatar) : null;
-            $updated->club_logo_url = $updated->club_logo ? asset('storage/' . $updated->club_logo) : null;
+            // FIXED: Use consistent URL generation
+            $updated->avatar_url = $this->getFullImageUrl($updated->avatar);
+            $updated->club_logo_url = $this->getFullImageUrl($updated->club_logo);
 
             return response()->json([
                 'message' => 'Membre mis à jour avec succès',
@@ -375,8 +393,8 @@ private function generateTemporaryPassword()
                 ->get();
             
             $memberships = $memberships->map(function($membership) {
-                $membership->logo_url = $membership->logo ? asset('storage/' . $membership->logo) : null;
-                $membership->cover_image_url = $membership->cover_image ? asset('storage/' . $membership->cover_image) : null;
+                $membership->logo_url = $this->getFullImageUrl($membership->logo);
+                $membership->cover_image_url = $this->getFullImageUrl($membership->cover_image);
                 return $membership;
             });
 
@@ -451,73 +469,74 @@ private function generateTemporaryPassword()
                 'updated_at' => now(),
             ]);
     }
+    
     /**
- * Get current user's club membership info
- */
-public function getMyClubMembership()
-{
-    try {
-        $personId = auth()->id();
-        
-        if (!$personId) {
-            return response()->json(['message' => 'Non authentifié'], 401);
+     * Get current user's club membership info
+     */
+    public function getMyClubMembership()
+    {
+        try {
+            $personId = auth()->id();
+            
+            if (!$personId) {
+                return response()->json(['message' => 'Non authentifié'], 401);
+            }
+
+            $membership = DB::table('club_members')
+                ->join('clubs', 'club_members.club_id', '=', 'clubs.id')
+                ->join('persons', 'club_members.person_id', '=', 'persons.id')
+                ->where('club_members.person_id', $personId)
+                ->where('club_members.status', 'active')
+                ->select(
+                    'club_members.id as membership_id',
+                    'club_members.role',
+                    'club_members.position',
+                    'club_members.status',
+                    'club_members.joined_at',
+                    'clubs.id as club_id',
+                    'clubs.name as club_name',
+                    'clubs.logo as club_logo',
+                    'clubs.description as club_description',
+                    'clubs.category as club_category',
+                    'persons.first_name',
+                    'persons.last_name',
+                    'persons.email'
+                )
+                ->first();
+
+            if (!$membership) {
+                return response()->json(['message' => 'Aucune adhésion active trouvée'], 404);
+            }
+
+            // FIXED: Use consistent URL generation
+            $club = (object)[
+                'id' => $membership->club_id,
+                'name' => $membership->club_name,
+                'logo' => $membership->club_logo,
+                'logo_url' => $this->getFullImageUrl($membership->club_logo),
+                'description' => $membership->club_description,
+                'category' => $membership->club_category,
+            ];
+
+            $membershipData = (object)[
+                'id' => $membership->membership_id,
+                'role' => $membership->role,
+                'position' => $membership->position,
+                'status' => $membership->status,
+                'joined_at' => $membership->joined_at,
+            ];
+
+            return response()->json([
+                'club' => $club,
+                'membership' => $membershipData
+            ], 200);
+
+        } catch (\Exception $e) {
+            \Log::error('Error fetching membership: ' . $e->getMessage());
+            return response()->json([
+                'message' => 'Erreur lors de la récupération de l\'adhésion',
+                'error' => $e->getMessage()
+            ], 500);
         }
-
-        $membership = DB::table('club_members')
-            ->join('clubs', 'club_members.club_id', '=', 'clubs.id')
-            ->join('persons', 'club_members.person_id', '=', 'persons.id')
-            ->where('club_members.person_id', $personId)
-            ->where('club_members.status', 'active')
-            ->select(
-                'club_members.id as membership_id',
-                'club_members.role',
-                'club_members.position',
-                'club_members.status',
-                'club_members.joined_at',
-                'clubs.id as club_id',
-                'clubs.name as club_name',
-                'clubs.logo as club_logo',
-                'clubs.description as club_description',
-                'clubs.category as club_category',
-                'persons.first_name',
-                'persons.last_name',
-                'persons.email'
-            )
-            ->first();
-
-        if (!$membership) {
-            return response()->json(['message' => 'Aucune adhésion active trouvée'], 404);
-        }
-
-        // Add full URLs for images
-        $club = (object)[
-            'id' => $membership->club_id,
-            'name' => $membership->club_name,
-            'logo' => $membership->club_logo,
-            'logo_url' => $membership->club_logo ? asset('storage/' . $membership->club_logo) : null,
-            'description' => $membership->club_description,
-            'category' => $membership->club_category,
-        ];
-
-        $membershipData = (object)[
-            'id' => $membership->membership_id,
-            'role' => $membership->role,
-            'position' => $membership->position,
-            'status' => $membership->status,
-            'joined_at' => $membership->joined_at,
-        ];
-
-        return response()->json([
-            'club' => $club,
-            'membership' => $membershipData
-        ], 200);
-
-    } catch (\Exception $e) {
-        \Log::error('Error fetching membership: ' . $e->getMessage());
-        return response()->json([
-            'message' => 'Erreur lors de la récupération de l\'adhésion',
-            'error' => $e->getMessage()
-        ], 500);
     }
-}
 }
