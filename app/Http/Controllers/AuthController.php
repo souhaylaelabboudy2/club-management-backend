@@ -12,6 +12,26 @@ use Illuminate\Support\Facades\Auth;
 
 class AuthController extends Controller
 {
+    /**
+     * Get club role ordering compatible with both MySQL and PostgreSQL
+     */
+    private function getClubRoleOrdering()
+    {
+        $driver = config('database.default');
+        
+        if ($driver === 'mysql') {
+            return "FIELD(role, 'president', 'board', 'member')";
+        }
+        
+        // PostgreSQL compatible
+        return "CASE 
+            WHEN role = 'president' THEN 1 
+            WHEN role = 'board' THEN 2 
+            WHEN role = 'member' THEN 3 
+            ELSE 4 
+        END";
+    }
+
     public function register(Request $request)
     {
         $validator = Validator::make($request->all(), [
@@ -83,7 +103,7 @@ class AuthController extends Controller
             if ($person->role === 'user') {
                 $membership = Club_member::where('person_id', $person->id)
                     ->where('status', 'active')
-                    ->orderByRaw("FIELD(role, 'president', 'board', 'member')")
+                    ->orderByRaw($this->getClubRoleOrdering())
                     ->first();
                     
                 if ($membership) {
@@ -152,7 +172,7 @@ class AuthController extends Controller
             if ($person->role === 'user') {
                 $membership = Club_member::where('person_id', $person->id)
                     ->where('status', 'active')
-                    ->orderByRaw("FIELD(role, 'president', 'board', 'member')")
+                    ->orderByRaw($this->getClubRoleOrdering())
                     ->first();
                     
                 if ($membership) {
