@@ -38,6 +38,30 @@ Route::get('/force-clear', function() {
         ]
     ]);
 });
+Route::get('/test-email-now', function() {
+    try {
+        \Log::info('Starting email test...');
+        
+        $person = \App\Models\Person::first();
+        $club = \App\Models\Club::first();
+        
+        if (!$person || !$club) {
+            return 'No person or club found';
+        }
+        
+        \Log::info('Sending to: ' . $person->email);
+        
+        Mail::to($person->email)->send(new \App\Mail\WelcomeEmail($person, $club, 'member'));
+        
+        \Log::info('Email sent successfully!');
+        
+        return 'SUCCESS! Check logs and email inbox.';
+        
+    } catch (\Exception $e) {
+        \Log::error('Email failed: ' . $e->getMessage());
+        return 'FAILED: ' . $e->getMessage();
+    }
+});
 // Auth routes (public - no auth required)
 Route::post('/api/login', [AuthController::class, 'login']);
 Route::post('/api/register', [AuthController::class, 'register']);
