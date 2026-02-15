@@ -225,3 +225,32 @@ Route::middleware(['auth:web'])->prefix('/api')->group(function () {
     Route::get('/persons/{personId}/notifications/unread-count', [NotificationController::class, 'getUnreadCount']);
     Route::get('/persons/{personId}/notifications/stats', [NotificationController::class, 'getStats']);
 });
+Route::get('/test-member-email', function() {
+    \Log::info('=== DIRECT EMAIL TEST START ===');
+    
+    $person = \App\Models\Person::first();
+    $club = \App\Models\Club::first();
+    
+    if (!$person || !$club) {
+        return 'ERROR: No person or club found in database';
+    }
+    
+    \Log::info('Found person and club', [
+        'person' => $person->email,
+        'club' => $club->name
+    ]);
+    
+    try {
+        \Log::info('Attempting to send email...');
+        Mail::to($person->email)->send(new \App\Mail\WelcomeEmail($person, $club, 'member'));
+        \Log::info('=== EMAIL SENT SUCCESSFULLY ===');
+        return 'SUCCESS! Email sent to ' . $person->email . ' - Check your inbox!';
+    } catch (\Exception $e) {
+        \Log::error('=== EMAIL FAILED ===', [
+            'error' => $e->getMessage(),
+            'file' => $e->getFile(),
+            'line' => $e->getLine()
+        ]);
+        return 'FAILED: ' . $e->getMessage();
+    }
+});
