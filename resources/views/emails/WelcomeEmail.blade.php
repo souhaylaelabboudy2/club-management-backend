@@ -419,10 +419,10 @@
             
             <!-- CTA Buttons -->
             <div class="cta-container">
-                <a href="{{ env('APP_URL') }}/login" class="cta-button">
+                <a href="https://club-management-frontend-production-710d.up.railway.app/Login/login" class="cta-button">
                     🚀 Se connecter maintenant
                 </a>
-                <a href="{{ env('APP_URL') }}/clubs/{{ $club->id }}" class="cta-button secondary">
+                <a href="https://club-management-frontend-production-710d.up.railway.app/clubs/{{ $club->id }}" class="cta-button secondary">
                     📍 Accéder au club
                 </a>
             </div>

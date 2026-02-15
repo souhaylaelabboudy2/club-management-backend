@@ -8,18 +8,19 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\DB;
 
 class ClubController extends Controller
 {
     private function addImageUrls($club)
     {
         // Remove 'public/' prefix if it exists, since storage link already points to storage/app/public
-        $logoPath = $club->logo;
+        $logoPath = $club->logo ?? null;
         if ($logoPath && str_starts_with($logoPath, 'public/')) {
             $logoPath = substr($logoPath, 7); // Remove 'public/' prefix
         }
         
-        $coverPath = $club->cover_image;
+        $coverPath = $club->cover_image ?? null;
         if ($coverPath && str_starts_with($coverPath, 'public/')) {
             $coverPath = substr($coverPath, 7);
         }
@@ -216,29 +217,59 @@ class ClubController extends Controller
             $person = $request->user();
             
             if (!$person) {
+                \Log::warning('getMyClub: No authenticated user');
                 return response()->json(['message' => 'Non authentifié'], 401);
             }
 
-            $membership = Club_member::where('person_id', $person->id)
-                ->where('role', 'president')
-                ->where('status', 'active')
+            \Log::info('getMyClub called', ['person_id' => $person->id]);
+
+            // OPTIMIZED: Single query with join instead of 3 separate queries
+            // This prevents Railway database connection timeout issues
+            $result = DB::table('club_members')
+                ->join('clubs', 'club_members.club_id', '=', 'clubs.id')
+                ->where('club_members.person_id', $person->id)
+                ->where('club_members.role', 'president')
+                ->where('club_members.status', 'active')
+                ->select(
+                    'clubs.id',
+                    'clubs.name',
+                    'clubs.code',
+                    'clubs.description',
+                    'clubs.mission',
+                    'clubs.logo',
+                    'clubs.cover_image',
+                    'clubs.category',
+                    'clubs.founding_year',
+                    'clubs.is_public',
+                    'clubs.total_members',
+                    'clubs.active_members',
+                    'clubs.created_at',
+                    'clubs.updated_at',
+                    'club_members.id as membership_id'
+                )
                 ->first();
 
-            if (!$membership) {
+            if (!$result) {
+                \Log::warning('getMyClub: No president membership found', ['person_id' => $person->id]);
                 return response()->json(['message' => 'Vous n\'êtes président d\'aucun club'], 403);
             }
 
-            $club = Club::find($membership->club_id);
-            
-            if (!$club) {
-                return response()->json(['message' => 'Club non trouvé'], 404);
-            }
-            
+            // Convert stdClass to object for processing
+            $club = $result;
             $this->addImageUrls($club);
+
+            \Log::info('getMyClub success', ['club_id' => $club->id, 'club_name' => $club->name]);
+            
             return response()->json($club, 200);
 
         } catch (\Exception $e) {
-            return response()->json(['message' => 'Erreur lors de la récupération du club', 'error' => $e->getMessage()], 500);
+            \Log::error('Error in getMyClub: ' . $e->getMessage(), [
+                'trace' => $e->getTraceAsString()
+            ]);
+            return response()->json([
+                'message' => 'Erreur lors de la récupération du club', 
+                'error' => $e->getMessage()
+            ], 500);
         }
     }
 

@@ -16,6 +16,12 @@ class MemberController extends Controller
     public function index(Request $request)
     {
         try {
+            $user = $request->user();
+            
+            if (!$user) {
+                return response()->json(['message' => 'Non authentifié'], 401);
+            }
+
             $query = DB::table('club_members')
                 ->join('persons', 'club_members.person_id', '=', 'persons.id')
                 ->join('clubs', 'club_members.club_id', '=', 'clubs.id')
@@ -33,11 +39,31 @@ class MemberController extends Controller
                     'persons.email',
                     'persons.avatar',
                     'persons.phone',
+                    'persons.cne',
                     'persons.member_code',
                     'clubs.name as club_name',
                     'clubs.logo as club_logo'
                 );
 
+            // If the user is a president (not admin), only show their club's members
+            if ($user->role === 'user') {
+                $membership = DB::table('club_members')
+                    ->where('person_id', $user->id)
+                    ->where('status', 'active')
+                    ->where('role', 'president')
+                    ->first();
+                
+                if (!$membership) {
+                    return response()->json([
+                        'message' => 'Vous n\'êtes pas président d\'un club'
+                    ], 403);
+                }
+                
+                // Filter to only this president's club
+                $query->where('club_members.club_id', $membership->club_id);
+            }
+
+            // Additional filters from query parameters
             if ($request->has('club_id')) {
                 $query->where('club_members.club_id', $request->club_id);
             }
@@ -62,8 +88,15 @@ class MemberController extends Controller
                 return $member;
             });
 
+            \Log::info('Members fetched', [
+                'user_id' => $user->id,
+                'role' => $user->role,
+                'count' => $members->count()
+            ]);
+
             return response()->json($members, 200);
         } catch (\Exception $e) {
+            \Log::error('Error fetching members: ' . $e->getMessage());
             return response()->json([
                 'message' => 'Erreur lors de la récupération des membres',
                 'error' => $e->getMessage()
@@ -179,6 +212,7 @@ class MemberController extends Controller
                     'persons.email',
                     'persons.avatar',
                     'persons.phone',
+                    'persons.cne',
                     'persons.member_code',
                     'clubs.name as club_name',
                     'clubs.logo as club_logo'
