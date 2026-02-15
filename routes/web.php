@@ -23,7 +23,21 @@ use Illuminate\Support\Facades\Log;
 | WEB ROUTES - All API routes with session support
 |--------------------------------------------------------------------------
 */
-
+Route::get('/force-clear', function() {
+    \Artisan::call('config:clear');
+    \Artisan::call('cache:clear');
+    \Artisan::call('config:cache');
+    
+    return response()->json([
+        'message' => 'Config cleared and cached',
+        'new_config' => [
+            'mailer' => config('mail.default'),
+            'host' => config('mail.mailers.smtp.host'),
+            'port' => config('mail.mailers.smtp.port'),
+            'username' => config('mail.mailers.smtp.username'),
+        ]
+    ]);
+});
 // Auth routes (public - no auth required)
 Route::post('/api/login', [AuthController::class, 'login']);
 Route::post('/api/register', [AuthController::class, 'register']);
