@@ -9,6 +9,7 @@ use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Mail\Mailables\Address;
 
 class WelcomeEmail extends Mailable
 {
@@ -18,14 +19,14 @@ class WelcomeEmail extends Mailable
         public Person $person,
         public Club $club,
         public string $role,
-        public ?string $password = null  // Add password parameter
+        public ?string $password = null
     ) {
     }
 
     public function envelope(): Envelope
     {
         return new Envelope(
-            to: $this->person->email,
+            from: new Address(config('mail.from.address'), config('mail.from.name')),
             subject: 'Bienvenue au ' . $this->club->name . ' - Vos identifiants',
         );
     }
@@ -33,7 +34,13 @@ class WelcomeEmail extends Mailable
     public function content(): Content
     {
         return new Content(
-            view: 'emails.WelcomeEmail',  
+            view: 'emails.WelcomeEmail',
+            with: [
+                'person' => $this->person,
+                'club' => $this->club,
+                'role' => $this->role,
+                'password' => $this->password,
+            ]
         );
     }
 

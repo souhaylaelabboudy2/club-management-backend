@@ -105,98 +105,124 @@ class MemberController extends Controller
     }
 
     public function store(Request $request)
-    {
-        $validator = Validator::make($request->all(), [
-            'person_id' => 'required|exists:persons,id',
-            'club_id' => 'required|exists:clubs,id',
-            'role' => 'required|in:president,board,member',
-            'position' => 'nullable|string|max:100',
-            'status' => 'sometimes|in:active,inactive,pending',
-        ]);
+{
+    $validator = Validator::make($request->all(), [
+        'person_id' => 'required|exists:persons,id',
+        'club_id' => 'required|exists:clubs,id',
+        'role' => 'required|in:president,board,member',
+        'position' => 'nullable|string|max:100',
+        'status' => 'sometimes|in:active,inactive,pending',
+    ]);
 
-        if ($validator->fails()) {
+    if ($validator->fails()) {
+        return response()->json([
+            'message' => 'Erreur de validation',
+            'errors' => $validator->errors()
+        ], 422);
+    }
+
+    try {
+        $exists = DB::table('club_members')
+            ->where('person_id', $request->person_id)
+            ->where('club_id', $request->club_id)
+            ->where('status', 'active')
+            ->exists();
+
+        if ($exists) {
             return response()->json([
-                'message' => 'Erreur de validation',
-                'errors' => $validator->errors()
-            ], 422);
+                'message' => 'Cette personne est déjà membre de ce club'
+            ], 409);
         }
 
-        try {
-            $exists = DB::table('club_members')
-                ->where('person_id', $request->person_id)
+        if ($request->role === 'president') {
+            $hasPresident = DB::table('club_members')
                 ->where('club_id', $request->club_id)
+                ->where('role', 'president')
                 ->where('status', 'active')
                 ->exists();
 
-            if ($exists) {
+            if ($hasPresident) {
                 return response()->json([
-                    'message' => 'Cette personne est déjà membre de ce club'
+                    'message' => 'Ce club a déjà un président actif'
                 ], 409);
             }
-
-            if ($request->role === 'president') {
-                $hasPresident = DB::table('club_members')
-                    ->where('club_id', $request->club_id)
-                    ->where('role', 'president')
-                    ->where('status', 'active')
-                    ->exists();
-
-                if ($hasPresident) {
-                    return response()->json([
-                        'message' => 'Ce club a déjà un président actif'
-                    ], 409);
-                }
-            }
-
-            $membershipId = DB::table('club_members')->insertGetId([
-                'person_id' => $request->person_id,
-                'club_id' => $request->club_id,
-                'role' => $request->role,
-                'position' => $request->position,
-                'status' => $request->status ?? 'active',
-                'joined_at' => now(),
-                'created_at' => now(),
-                'updated_at' => now(),
-            ]);
-
-            $this->updateClubMemberCounts($request->club_id);
-            
-            try {
-                $person = Person::find($request->person_id);
-                $club = Club::find($request->club_id);
-                Mail::send(new WelcomeEmail($person, $club, $request->role));
-            } catch (\Exception $e) {
-                \Log::error('Email failed: ' . $e->getMessage());
-            }
-
-            $membership = DB::table('club_members')
-                ->join('persons', 'club_members.person_id', '=', 'persons.id')
-                ->join('clubs', 'club_members.club_id', '=', 'clubs.id')
-                ->where('club_members.id', $membershipId)
-                ->select(
-                    'club_members.*', 
-                    'persons.first_name', 
-                    'persons.last_name',
-                    'persons.avatar',
-                    'clubs.name as club_name',
-                    'clubs.logo as club_logo'
-                )
-                ->first();
-            
-            $membership->avatar_url = $membership->avatar ? url('storage/' . $membership->avatar) : null;
-            $membership->club_logo_url = $membership->club_logo ? url('storage/' . $membership->club_logo) : null;
-
-            return response()->json([
-                'message' => 'Membre ajouté avec succès',
-                'membership' => $membership
-            ], 201);
-        } catch (\Exception $e) {
-            return response()->json([
-                'message' => 'Erreur lors de l\'ajout du membre',
-                'error' => $e->getMessage()
-            ], 500);
         }
+
+        $membershipId = DB::table('club_members')->insertGetId([
+            'person_id' => $request->person_id,
+            'club_id' => $request->club_id,
+            'role' => $request->role,
+            'position' => $request->position,
+            'status' => $request->status ?? 'active',
+            'joined_at' => now(),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $this->updateClubMemberCounts($request->club_id);
+        
+        // FIXED EMAIL SENDING SECTION
+        try {
+            $person = Person::find($request->person_id);
+            $club = Club::find($request->club_id);
+            
+            \Log::info('Attempting to send welcome email', [
+                'to' => $person->email,
+                'club' => $club->name,
+                'role' => $request->role,
+                'mail_config' => [
+                    'mailer' => config('mail.default'),
+                    'host' => config('mail.mailers.smtp.host'),
+                    'port' => config('mail.mailers.smtp.port'),
+                    'from' => config('mail.from.address'),
+                ]
+            ]);
+            
+            Mail::to($person->email)->send(new WelcomeEmail($person, $club, $request->role));
+            
+            \Log::info('Welcome email sent successfully', ['to' => $person->email]);
+            
+        } catch (\Exception $e) {
+            \Log::error('Email sending failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            // Don't fail the entire request if email fails
+        }
+
+        $membership = DB::table('club_members')
+            ->join('persons', 'club_members.person_id', '=', 'persons.id')
+            ->join('clubs', 'club_members.club_id', '=', 'clubs.id')
+            ->where('club_members.id', $membershipId)
+            ->select(
+                'club_members.*', 
+                'persons.first_name', 
+                'persons.last_name',
+                'persons.avatar',
+                'clubs.name as club_name',
+                'clubs.logo as club_logo'
+            )
+            ->first();
+        
+        $membership->avatar_url = $membership->avatar ? url('storage/' . $membership->avatar) : null;
+        $membership->club_logo_url = $membership->club_logo ? url('storage/' . $membership->club_logo) : null;
+
+        return response()->json([
+            'message' => 'Membre ajouté avec succès',
+            'membership' => $membership
+        ], 201);
+    } catch (\Exception $e) {
+        \Log::error('Error adding member', [
+            'error' => $e->getMessage(),
+            'trace' => $e->getTraceAsString()
+        ]);
+        
+        return response()->json([
+            'message' => 'Erreur lors de l\'ajout du membre',
+            'error' => $e->getMessage()
+        ], 500);
     }
+}
 
     public function show($id)
     {
