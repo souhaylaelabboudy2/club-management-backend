@@ -3,329 +3,225 @@
 namespace App\Http\Controllers;
 
 use App\Models\Person;
-use App\Models\Club_member;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Validator;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
+use Laravel\Socialite\Facades\Socialite;
 
-class AuthController extends Controller
+class GoogleAuthController extends Controller
 {
-    public function register(Request $request)
+    private function accountSetupUrl(): string
     {
-        $validator = Validator::make($request->all(), [
-            'first_name' => 'required|string|max:100',
-            'last_name' => 'required|string|max:100',
-            'email' => 'required|email|unique:persons,email',
-            'password' => 'required|string|min:6|confirmed',
-            'cne' => 'nullable|string|unique:persons,cne',
-            'phone' => 'nullable|string|max:20',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json(['message' => 'Erreur de validation', 'errors' => $validator->errors()], 422);
-        }
-
-        try {
-            $person = Person::create([
-                'first_name' => $request->first_name,
-                'last_name' => $request->last_name,
-                'email' => $request->email,
-                'password' => Hash::make($request->password),
-                'cne' => $request->cne,
-                'phone' => $request->phone,
-                'member_code' => $this->generateMemberCode(),
-                'is_active' => true,
-            ]);
-
-            Log::info('User registered', ['person_id' => $person->id]);
-
-            return response()->json(['message' => 'Inscription réussie', 'user' => $person], 201);
-        } catch (\Exception $e) {
-            Log::error('Registration error: ' . $e->getMessage());
-            return response()->json(['message' => 'Erreur lors de l\'inscription'], 500);
-        }
+        return env('FRONTEND_URL') . '/Login/AccountSetup';
     }
 
-    public function login(Request $request)
+    private function loginUrl(): string
+    {
+        return env('FRONTEND_URL') . '/Login/login';
+    }
+
+    // ─────────────────────────────────────────────
+    // 1. LOGIN REDIRECT
+    // ─────────────────────────────────────────────
+    public function loginRedirect()
+    {
+        return Socialite::driver('google')
+            ->redirectUrl(env('GOOGLE_REDIRECT_URI'))
+            ->stateless()
+            ->redirect();
+    }
+
+    // ─────────────────────────────────────────────
+    // 2. LOGIN CALLBACK — with 2FA bypass fix
+    // ─────────────────────────────────────────────
+    public function loginCallback(Request $request)
     {
         try {
-            Log::info('Login attempt', ['email' => $request->email]);
+            $googleUser = Socialite::driver('google')
+                ->redirectUrl(env('GOOGLE_REDIRECT_URI'))
+                ->stateless()
+                ->user();
 
-            $validator = Validator::make($request->all(), [
-                'email' => 'required|email',
-                'password' => 'required|string',
-            ]);
+            $person = Person::where('google_id', $googleUser->getId())
+                ->orWhere('google_email', $googleUser->getEmail())
+                ->first();
 
-            if ($validator->fails()) {
-                return response()->json(['message' => 'Erreur de validation', 'errors' => $validator->errors()], 422);
+            if (!$person) {
+                Log::warning('Google login: no linked account found', [
+                    'google_email' => $googleUser->getEmail(),
+                ]);
+                return redirect($this->loginUrl() . '?error=account_not_linked');
             }
-
-            if (!Auth::attempt($request->only('email', 'password'))) {
-                Log::warning('Login failed', ['email' => $request->email]);
-                return response()->json(['message' => 'Email ou mot de passe incorrect'], 401);
-            }
-
-            $person = Auth::user();
 
             if (!$person->is_active) {
-                Auth::logout();
-                return response()->json(['message' => 'Compte désactivé'], 403);
+                Log::warning('Google login: account disabled', ['person_id' => $person->id]);
+                return redirect($this->loginUrl() . '?error=account_disabled');
             }
 
+            // ✅ 2FA CHECK — don't let Google bypass 2FA
+            if ($person->two_factor_enabled) {
+                $request->session()->put('2fa_pending_person_id', [
+                    'id'         => $person->id,
+                    'expires_at' => now()->addMinutes(10)->timestamp,
+                ]);
+                $request->session()->save();
+
+                Log::info('Google login: 2FA required', ['person_id' => $person->id]);
+
+                return redirect($this->loginUrl() . '?requires_2fa=true&person_id=' . $person->id);
+            }
+
+            // No 2FA — log in normally
+            Auth::login($person, true);
             $request->session()->regenerate();
+            $request->session()->save();
 
-            $clubRole = null;
-            $clubId = null;
-            
-            if ($person->role === 'user') {
-                // PostgreSQL and MySQL compatible ordering
-                $membership = Club_member::where('person_id', $person->id)
-                    ->where('status', 'active')
-                    ->orderByRaw("CASE 
-                        WHEN role = 'president' THEN 1 
-                        WHEN role = 'board' THEN 2 
-                        WHEN role = 'member' THEN 3 
-                        ELSE 4 
-                    END")
-                    ->first();
-                    
-                if ($membership) {
-                    $clubRole = $membership->role;
-                    $clubId = $membership->club_id;
-                }
-            }
+            Log::info('Google login success', ['person_id' => $person->id]);
 
-            Log::info('Login successful', ['person_id' => $person->id, 'session_id' => session()->getId()]);
-
-            return response()->json([
-                'message' => 'Connexion réussie',
-                'user' => [
-                    'id' => $person->id,
-                    'first_name' => $person->first_name,
-                    'last_name' => $person->last_name,
-                    'email' => $person->email,
-                    'avatar' => $person->avatar,
-                    'avatar_url' => $person->avatar ? url('storage/' . $person->avatar) : null,
-                    'member_code' => $person->member_code,
-                    'club_id' => $clubId,
-                ],
-                'role' => $person->role,
-                'club_role' => $clubRole,
-                'club_id' => $clubId,
-            ], 200);
+            return redirect($this->loginUrl() . '?google_login=success');
 
         } catch (\Exception $e) {
-            Log::error('Login error: ' . $e->getMessage());
-            return response()->json(['message' => 'Erreur lors de la connexion'], 500);
+            Log::error('Google loginCallback error: ' . $e->getMessage());
+            return redirect($this->loginUrl() . '?error=google_error');
         }
     }
 
-    public function verifySession(Request $request)
+    // ─────────────────────────────────────────────
+    // 3. LINK REDIRECT
+    // ─────────────────────────────────────────────
+    public function linkRedirect(Request $request)
+    {
+        if (!Auth::check()) {
+            Log::warning('linkRedirect: user not authenticated');
+            return redirect($this->loginUrl() . '?error=session_expired');
+        }
+
+        $personId = Auth::id();
+        Log::info('Google linkRedirect', ['person_id' => $personId]);
+
+        return Socialite::driver('google')
+            ->redirectUrl(env('GOOGLE_LINK_REDIRECT_URI'))
+            ->with(['state' => base64_encode($personId)])
+            ->redirect();
+    }
+
+    // ─────────────────────────────────────────────
+    // 4. LINK CALLBACK
+    // ─────────────────────────────────────────────
+    public function linkCallback(Request $request)
     {
         try {
-            Log::info('Verify session called', [
-                'session_id' => session()->getId(),
-                'authenticated' => Auth::check()
+            Log::info('linkCallback fired', [
+                'state'     => $request->get('state'),
+                'has_code'  => $request->has('code'),
+                'has_error' => $request->has('error'),
             ]);
 
-            if (!Auth::check()) {
-                Log::warning('Session verification failed - not authenticated');
-                return response()->json(['message' => 'Non authentifié'], 401);
+            if ($request->has('error')) {
+                Log::warning('Google returned error: ' . $request->get('error'));
+                return redirect($this->accountSetupUrl() . '?error=google_error');
             }
 
-            $person = Auth::user();
-            
-            if (!$person) {
-                Log::warning('Session verification failed - no user found');
-                return response()->json(['message' => 'Utilisateur non trouvé'], 404);
-            }
+            $googleUser = Socialite::driver('google')
+                ->redirectUrl(env('GOOGLE_LINK_REDIRECT_URI'))
+                ->stateless()
+                ->user();
 
-            if (!$person->is_active) {
-                Log::warning('Session verification failed - account disabled', ['person_id' => $person->id]);
-                Auth::logout();
-                return response()->json(['message' => 'Compte désactivé'], 403);
-            }
+            $state    = $request->get('state');
+            $personId = $state ? base64_decode($state) : null;
 
-            $clubRole = null;
-            $clubId = null;
-            
-            if ($person->role === 'user') {
-                // PostgreSQL and MySQL compatible ordering
-                $membership = Club_member::where('person_id', $person->id)
-                    ->where('status', 'active')
-                    ->orderByRaw("CASE 
-                        WHEN role = 'president' THEN 1 
-                        WHEN role = 'board' THEN 2 
-                        WHEN role = 'member' THEN 3 
-                        ELSE 4 
-                    END")
-                    ->first();
-                    
-                if ($membership) {
-                    $clubRole = $membership->role;
-                    $clubId = $membership->club_id;
-                }
-            }
-
-            Log::info('Session verified successfully', [
-                'person_id' => $person->id,
-                'role' => $person->role,
-                'club_role' => $clubRole
+            Log::info('linkCallback decoded', [
+                'person_id'    => $personId,
+                'google_email' => $googleUser->getEmail(),
+                'google_id'    => $googleUser->getId(),
             ]);
 
-            return response()->json([
-                'message' => 'Session valide',
-                'user' => [
-                    'id' => $person->id,
-                    'first_name' => $person->first_name,
-                    'last_name' => $person->last_name,
-                    'email' => $person->email,
-                    'avatar' => $person->avatar,
-                    'avatar_url' => $person->avatar ? url('storage/' . $person->avatar) : null,
-                    'member_code' => $person->member_code,
-                    'club_id' => $clubId,
-                ],
-                'role' => $person->role,
-                'club_role' => $clubRole,
-                'club_id' => $clubId,
-            ], 200);
+            if (!$personId) {
+                return redirect($this->accountSetupUrl() . '?error=session_expired');
+            }
 
-        } catch (\Exception $e) {
-            Log::error('Session verification error: ' . $e->getMessage(), [
-                'trace' => $e->getTraceAsString()
+            $person = Person::find($personId);
+
+            if (!$person) {
+                return redirect($this->accountSetupUrl() . '?error=user_not_found');
+            }
+
+            $existingLink = Person::where('google_id', $googleUser->getId())
+                ->where('id', '!=', $person->id)
+                ->first();
+
+            if ($existingLink) {
+                return redirect($this->accountSetupUrl() . '?error=google_already_linked');
+            }
+
+            $person->update([
+                'google_id'            => $googleUser->getId(),
+                'google_email'         => $googleUser->getEmail(),
+                'google_token'         => $googleUser->token,
+                'google_refresh_token' => $googleUser->refreshToken ?? null,
             ]);
-            return response()->json(['message' => 'Erreur lors de la vérification de session'], 500);
-        }
-    }
 
-    public function logout(Request $request)
-    {
-        Auth::logout();
-        $request->session()->invalidate();
-        $request->session()->regenerateToken();
-        return response()->json(['message' => 'Déconnecté avec succès'], 200);
-    }
+            Auth::login($person, true);
+            $request->session()->regenerate();
+            $request->session()->save();
 
-    public function profile(Request $request)
-    {
-        try {
-            $person = $request->user();
-            if (!$person) {
-                return response()->json(['message' => 'Non authentifié'], 401);
-            }
-            
-            $person->avatar_url = $person->avatar ? url('storage/' . $person->avatar) : null;
-            
-            return response()->json(['user' => $person], 200);
+            Log::info('Google account linked successfully', [
+                'person_id'    => $person->id,
+                'google_email' => $googleUser->getEmail(),
+            ]);
+
+            return redirect($this->accountSetupUrl() . '?success=google_linked');
+
         } catch (\Exception $e) {
-            Log::error('Profile error: ' . $e->getMessage());
-            return response()->json(['message' => 'Erreur'], 500);
+            Log::error('linkCallback exception: ' . $e->getMessage());
+            return redirect($this->accountSetupUrl() . '?error=google_error');
         }
     }
 
-    public function updateProfile(Request $request)
-    {
-        $validator = Validator::make($request->all(), [
-            'first_name' => 'sometimes|required|string|max:100',
-            'last_name' => 'sometimes|required|string|max:100',
-            'phone' => 'nullable|string|max:20',
-            'avatar' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:2048',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json(['message' => 'Erreur de validation', 'errors' => $validator->errors()], 422);
-        }
-
-        try {
-            $person = $request->user();
-            if (!$person) {
-                return response()->json(['message' => 'Non authentifié'], 401);
-            }
-            
-            $data = $request->only(['first_name', 'last_name', 'phone']);
-            
-            if ($request->hasFile('avatar')) {
-                if ($person->avatar && \Storage::disk('public')->exists($person->avatar)) {
-                    \Storage::disk('public')->delete($person->avatar);
-                }
-                $avatarPath = $request->file('avatar')->store('persons/avatars', 'public');
-                $data['avatar'] = $avatarPath;
-            }
-            
-            $person->update($data);
-            $person->refresh();
-            
-            $person->avatar_url = $person->avatar ? url('storage/' . $person->avatar) : null;
-            
-            Log::info('Profile updated', ['person_id' => $person->id]);
-            
-            return response()->json(['message' => 'Profil mis à jour', 'user' => $person], 200);
-        } catch (\Exception $e) {
-            Log::error('Profile update error: ' . $e->getMessage());
-            return response()->json(['message' => 'Erreur'], 500);
-        }
-    }
-
-    public function changePassword(Request $request)
+    // ─────────────────────────────────────────────
+    // 5. CHECK GOOGLE STATUS
+    // ─────────────────────────────────────────────
+    public function checkGoogleStatus(Request $request)
     {
         $person = $request->user();
-        $hasPassword = !empty($person->password);
-        
-        $validator = Validator::make($request->all(), [
-            'current_password' => $hasPassword ? 'required|string' : 'nullable',
-            'new_password' => 'required|string|min:6',
-            'new_password_confirmation' => 'required|string|same:new_password',
-        ], [
-            'new_password_confirmation.same' => 'Les mots de passe ne correspondent pas',
-            'new_password.min' => 'Le mot de passe doit contenir au moins 6 caractères',
-            'current_password.required' => 'Le mot de passe actuel est requis',
-            'new_password.required' => 'Le nouveau mot de passe est requis',
-            'new_password_confirmation.required' => 'La confirmation du mot de passe est requise',
+
+        if (!$person) {
+            return response()->json(['message' => 'Non authentifié'], 401);
+        }
+
+        return response()->json([
+            'is_linked'    => !empty($person->google_id),
+            'google_email' => $person->google_email,
+            'has_password' => !empty($person->password),
         ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'message' => 'Erreur de validation', 
-                'errors' => $validator->errors()
-            ], 422);
-        }
-
-        try {
-            if (!$person) {
-                return response()->json(['message' => 'Non authentifié'], 401);
-            }
-            
-            if ($hasPassword) {
-                if (!Hash::check($request->current_password, $person->password)) {
-                    return response()->json([
-                        'message' => 'Le mot de passe actuel est incorrect'
-                    ], 401);
-                }
-            }
-            
-            $person->update(['password' => Hash::make($request->new_password)]);
-            
-            Log::info('Password changed', ['person_id' => $person->id]);
-            
-            return response()->json([
-                'message' => 'Mot de passe changé avec succès'
-            ], 200);
-            
-        } catch (\Exception $e) {
-            Log::error('Password change error: ' . $e->getMessage());
-            return response()->json([
-                'message' => 'Erreur lors du changement de mot de passe'
-            ], 500);
-        }
     }
 
-    private function generateMemberCode()
+    // ─────────────────────────────────────────────
+    // 6. UNLINK GOOGLE
+    // ─────────────────────────────────────────────
+    public function unlinkGoogle(Request $request)
     {
-        do {
-            $code = 'MBR' . strtoupper(substr(md5(uniqid()), 0, 8));
-        } while (Person::where('member_code', $code)->exists());
-        return $code;
+        $person = $request->user();
+
+        if (!$person) {
+            return response()->json(['message' => 'Non authentifié'], 401);
+        }
+
+        if (empty($person->password)) {
+            return response()->json([
+                'message' => "Définissez d'abord un mot de passe avant de délier Google",
+            ], 400);
+        }
+
+        $person->update([
+            'google_id'            => null,
+            'google_email'         => null,
+            'google_token'         => null,
+            'google_refresh_token' => null,
+        ]);
+
+        Log::info('Google unlinked', ['person_id' => $person->id]);
+
+        return response()->json(['message' => 'Compte Google délié avec succès']);
     }
 }

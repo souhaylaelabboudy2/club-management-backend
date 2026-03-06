@@ -18,9 +18,9 @@ class Person extends Authenticatable
         'email',
         'password',
         'google_id',
-        'google_email',          // Added for Google OAuth
-        'google_token',          // Added for Google OAuth
-        'google_refresh_token',  // Added for Google OAuth
+        'google_email',
+        'google_token',
+        'google_refresh_token',
         'member_code',
         'cne',
         'avatar',
@@ -28,18 +28,25 @@ class Person extends Authenticatable
         'role',
         'is_active',
         'email_verified_at',
+        'remember_token',
+        'two_factor_secret',
+        'two_factor_enabled',
+        'two_factor_confirmed_at',
     ];
 
     protected $hidden = [
         'password',
-        'google_token',          // Hide sensitive tokens
-        'google_refresh_token',  // Hide sensitive tokens
+        'google_token',
+        'google_refresh_token',
+        'two_factor_secret',
     ];
 
     protected $casts = [
-        'is_active' => 'boolean',
-        'email_verified_at' => 'datetime',
-        'created_at' => 'datetime',
-        'updated_at' => 'datetime',
+        'is_active'               => 'boolean',
+        'two_factor_enabled'      => 'boolean',
+        'email_verified_at'       => 'datetime',
+        'two_factor_confirmed_at' => 'datetime',
+        'created_at'              => 'datetime',
+        'updated_at'              => 'datetime',
     ];
 }
