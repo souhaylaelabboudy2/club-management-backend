@@ -26,7 +26,7 @@ Route::get('/force-clear', function () {
     \Artisan::call('cache:clear');
     \Artisan::call('config:cache');
     return response()->json([
-        'message'    => 'Config cleared and cached',
+        'message' => 'Config cleared and cached',
         'new_config' => [
             'mailer'   => config('mail.default'),
             'host'     => config('mail.mailers.smtp.host'),
@@ -43,9 +43,7 @@ Route::get('/test-email-now', function () {
         if (!$person || !$club) return 'ERROR: No person or club in database';
         Mail::to($person->email)->send(new \App\Mail\WelcomeEmail($person, $club, 'member'));
         return 'SUCCESS! Email sent to ' . $person->email;
-    } catch (\Exception $e) {
-        return 'FAILED: ' . $e->getMessage();
-    }
+    } catch (\Exception $e) { return 'FAILED: ' . $e->getMessage(); }
 });
 
 Route::get('/test-member-email', function () {
@@ -55,9 +53,7 @@ Route::get('/test-member-email', function () {
     try {
         Mail::to($person->email)->send(new \App\Mail\WelcomeEmail($person, $club, 'member'));
         return 'SUCCESS! Email sent to ' . $person->email;
-    } catch (\Exception $e) {
-        return 'FAILED: ' . $e->getMessage();
-    }
+    } catch (\Exception $e) { return 'FAILED: ' . $e->getMessage(); }
 });
 
 Route::get('/check-mail-config', function () {
@@ -135,7 +131,7 @@ Route::get('/api/verify-session', function (Request $request) {
 })->middleware('web');
 
 // ============================================
-// PUBLIC 2FA VERIFY ROUTE — rate limited to 5 attempts/minute
+// PUBLIC 2FA VERIFY ROUTE
 // ============================================
 Route::middleware(['web', 'throttle:5,1'])->group(function () {
     Route::post('/api/2fa/verify-login', [TwoFactorController::class, 'verifyLogin']);
@@ -147,10 +143,11 @@ Route::middleware(['web', 'throttle:5,1'])->group(function () {
 Route::post('/api/public/persons', [PersonController::class, 'store']);
 Route::post('/api/public/members', [MemberController::class, 'store']);
 
-Route::get('/api/clubs',                 [ClubController::class, 'index']);
-Route::get('/api/clubs/code/{code}',     [ClubController::class, 'showByCode']);
-Route::get('/api/clubs/{id}',            [ClubController::class, 'show']);
-Route::get('/api/clubs/{id}/statistics', [ClubController::class, 'statistics']);
+Route::get('/api/clubs',                 [ClubController::class,  'index']);
+Route::get('/api/clubs/code/{code}',     [ClubController::class,  'showByCode']);
+Route::get('/api/clubs/{id}',            [ClubController::class,  'show']);
+Route::get('/api/clubs/{id}/statistics', [ClubController::class,  'statistics']);
+Route::get('/api/clubs/{id}/members',    [MemberController::class,'getByClub']);
 
 Route::get('/api/events/upcoming/list',  [EventController::class, 'upcoming']);
 Route::get('/api/events/past/completed', [EventController::class, 'pastEvents']);
@@ -158,11 +155,11 @@ Route::get('/api/events/club/{clubId}',  [EventController::class, 'getByClub']);
 Route::get('/api/events',                [EventController::class, 'index']);
 Route::get('/api/events/{id}',           [EventController::class, 'show']);
 
-Route::get('/api/members',              [MemberController::class, 'index']);
-Route::get('/api/members/{id}',         [MemberController::class, 'show']);
-Route::get('/api/clubs/{clubId}/stats', [MemberController::class, 'getClubStats']);
+Route::get('/api/members',               [MemberController::class,'index']);
+Route::get('/api/members/{id}',          [MemberController::class,'show']);
+Route::get('/api/clubs/{clubId}/stats',  [MemberController::class,'getClubStats']);
 
-Route::get('/api/tickets/qr/{qrCode}', [TicketController::class, 'showByQRCode']);
+Route::get('/api/tickets/qr/{qrCode}',  [TicketController::class,'showByQRCode']);
 
 // ============================================
 // TICKET STATIC ROUTES
@@ -191,7 +188,7 @@ Route::middleware(['auth:web'])->prefix('/api')->group(function () {
     Route::get('/google/status',  [GoogleAuthController::class, 'checkGoogleStatus']);
     Route::post('/google/unlink', [GoogleAuthController::class, 'unlinkGoogle']);
 
-    // 2FA — setup/enable/disable rate limited to 10/minute, regenerate to 3/minute
+    // 2FA
     Route::prefix('2fa')->group(function () {
         Route::middleware('throttle:10,1')->group(function () {
             Route::post('/setup',   [TwoFactorController::class, 'setup']);
@@ -204,7 +201,8 @@ Route::middleware(['auth:web'])->prefix('/api')->group(function () {
     });
 
     // Clubs
-    Route::get('/my-club',                    [ClubController::class, 'getMyClub']);
+    Route::get('/my-club',                    [ClubController::class, 'getMyClub']);     // président uniquement
+    Route::get('/my-club-info',               [ClubController::class, 'getMyClubInfo']); // ← président + bureau
     Route::post('/clubs',                     [ClubController::class, 'store']);
     Route::put('/clubs/{id}',                 [ClubController::class, 'update']);
     Route::delete('/clubs/{id}',              [ClubController::class, 'destroy']);
