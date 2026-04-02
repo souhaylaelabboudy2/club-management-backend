@@ -18,55 +18,8 @@ use App\Models\Club_member;
 use Illuminate\Support\Facades\Log;
 use App\Http\Controllers\TwoFactorController;
 
-// ============================================
-// UTILITY ROUTES
-// ============================================
-Route::get('/force-clear', function () {
-    \Artisan::call('config:clear');
-    \Artisan::call('cache:clear');
-    \Artisan::call('config:cache');
-    return response()->json([
-        'message' => 'Config cleared and cached',
-        'new_config' => [
-            'mailer'   => config('mail.default'),
-            'host'     => config('mail.mailers.smtp.host'),
-            'port'     => config('mail.mailers.smtp.port'),
-            'username' => config('mail.mailers.smtp.username'),
-        ],
-    ]);
-});
 
-Route::get('/test-email-now', function () {
-    try {
-        $person = \App\Models\Person::first();
-        $club   = \App\Models\Club::first();
-        if (!$person || !$club) return 'ERROR: No person or club in database';
-        Mail::to($person->email)->send(new \App\Mail\WelcomeEmail($person, $club, 'member'));
-        return 'SUCCESS! Email sent to ' . $person->email;
-    } catch (\Exception $e) { return 'FAILED: ' . $e->getMessage(); }
-});
 
-Route::get('/test-member-email', function () {
-    $person = \App\Models\Person::first();
-    $club   = \App\Models\Club::first();
-    if (!$person || !$club) return 'ERROR: No person or club found in database';
-    try {
-        Mail::to($person->email)->send(new \App\Mail\WelcomeEmail($person, $club, 'member'));
-        return 'SUCCESS! Email sent to ' . $person->email;
-    } catch (\Exception $e) { return 'FAILED: ' . $e->getMessage(); }
-});
-
-Route::get('/check-mail-config', function () {
-    return response()->json([
-        'mailer'       => config('mail.default'),
-        'host'         => config('mail.mailers.smtp.host'),
-        'port'         => config('mail.mailers.smtp.port'),
-        'username'     => config('mail.mailers.smtp.username'),
-        'encryption'   => config('mail.mailers.smtp.encryption'),
-        'from_address' => config('mail.from.address'),
-        'from_name'    => config('mail.from.name'),
-    ]);
-});
 
 // ============================================
 // PUBLIC AUTH ROUTES
@@ -142,6 +95,8 @@ Route::middleware(['web', 'throttle:5,1'])->group(function () {
 // ============================================
 Route::post('/api/public/persons', [PersonController::class, 'store']);
 Route::post('/api/public/members', [MemberController::class, 'store']);
+
+Route::get('/api/clubs/{clubId}/president', [MemberController::class, 'getPresidentByClub']);
 
 Route::get('/api/clubs',                 [ClubController::class,  'index']);
 Route::get('/api/clubs/code/{code}',     [ClubController::class,  'showByCode']);

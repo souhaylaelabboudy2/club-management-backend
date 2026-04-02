@@ -251,60 +251,58 @@ class MemberController extends Controller
         }
     }
 
-    // ============ NOUVELLE MÉTHODE PUBLIQUE ============
-   public function getByClub($clubId)
-{
-    try {
-        $members = DB::table('club_members')
-            ->join('persons', 'club_members.person_id', '=', 'persons.id')
-            ->where('club_members.club_id', $clubId)
-            ->where('club_members.status', 'active')
-            ->select(
-                'club_members.id',
-                'club_members.person_id',   // ← ADD THIS LINE
-                'club_members.club_id',
-                'club_members.role',
-                'club_members.status',
-                'club_members.position',
-                'persons.first_name',
-                'persons.last_name',
-                'persons.email',
-                'persons.phone',
-                'persons.avatar'
-            )
-            ->get()
-            ->map(function($m) {
-                $m->avatar_url = $m->avatar ? url('storage/' . $m->avatar) : null;
-                return $m;
-            });
+    public function getByClub($clubId)
+    {
+        try {
+            $members = DB::table('club_members')
+                ->join('persons', 'club_members.person_id', '=', 'persons.id')
+                ->where('club_members.club_id', $clubId)
+                ->where('club_members.status', 'active')
+                ->select(
+                    'club_members.id',
+                    'club_members.person_id',
+                    'club_members.club_id',
+                    'club_members.role',
+                    'club_members.status',
+                    'club_members.position',
+                    'persons.first_name',
+                    'persons.last_name',
+                    'persons.email',
+                    'persons.phone',
+                    'persons.avatar'
+                )
+                ->get()
+                ->map(function($m) {
+                    $m->avatar_url = $m->avatar ? url('storage/' . $m->avatar) : null;
+                    return $m;
+                });
 
-        return response()->json($members, 200);
-    } catch (\Exception $e) {
-        return response()->json(['message' => 'Erreur', 'error' => $e->getMessage()], 500);
+            return response()->json($members, 200);
+        } catch (\Exception $e) {
+            return response()->json(['message' => 'Erreur', 'error' => $e->getMessage()], 500);
+        }
     }
-}
-    // ============ FIN NOUVELLE MÉTHODE ============
 
     public function store(Request $request)
     {
-        Log::info('Adding new member');
-        
         $validator = Validator::make($request->all(), [
             'person_id' => 'required|exists:persons,id',
             'club_id' => 'required|exists:clubs,id',
             'role' => 'required|in:president,board,member',
             'position' => 'nullable|string|max:100',
             'status' => 'sometimes|in:active,inactive,pending',
+            'replace_existing' => 'boolean'
         ]);
 
         if ($validator->fails()) {
-            return response()->json([
-                'message' => 'Erreur de validation',
-                'errors' => $validator->errors()
-            ], 422);
+            return response()->json(['message' => 'Erreur de validation', 'errors' => $validator->errors()], 422);
         }
 
+        // Start Transaction
+        DB::beginTransaction();
+
         try {
+            // 1. Check if already a member
             $exists = DB::table('club_members')
                 ->where('person_id', $request->person_id)
                 ->where('club_id', $request->club_id)
@@ -312,25 +310,37 @@ class MemberController extends Controller
                 ->exists();
 
             if ($exists) {
-                return response()->json([
-                    'message' => 'Cette personne est déjà membre de ce club'
-                ], 409);
+                DB::rollBack();
+                return response()->json(['message' => 'Cette personne est déjà membre de ce club'], 409);
             }
 
+            // 2. Handle President Replacement
             if ($request->role === 'president') {
-                $hasPresident = DB::table('club_members')
+                $existingPresident = DB::table('club_members')
                     ->where('club_id', $request->club_id)
                     ->where('role', 'president')
                     ->where('status', 'active')
-                    ->exists();
+                    ->first();
 
-                if ($hasPresident) {
-                    return response()->json([
-                        'message' => 'Ce club a déjà un président actif'
-                    ], 409);
+                if ($existingPresident) {
+                    if ($request->boolean('replace_existing')) {
+                        // Deactivate the old president
+                        DB::table('club_members')
+                            ->where('id', $existingPresident->id)
+                            ->update([
+                                'status' => 'inactive',
+                                'left_at' => now(),
+                                'updated_at' => now()
+                            ]);
+                        Log::info("Old president {$existingPresident->id} deactivated.");
+                    } else {
+                        DB::rollBack();
+                        return response()->json(['message' => 'Ce club a déjà un président actif'], 409);
+                    }
                 }
             }
 
+            // 3. Insert New Membership
             $membershipId = DB::table('club_members')->insertGetId([
                 'person_id' => $request->person_id,
                 'club_id' => $request->club_id,
@@ -342,50 +352,21 @@ class MemberController extends Controller
                 'updated_at' => now(),
             ]);
 
+            // 4. Update stats and trigger notifications
             $this->updateClubMemberCounts($request->club_id);
             
-            try {
-                $person = Person::find($request->person_id);
-                $club = Club::find($request->club_id);
-                
-                $this->createWelcomeNotification($person, $club, $request->role);
-                $this->createCustomWelcomeNotification($person, $club);
-                $this->createMembershipAddedNotification($person, $club, $request->role);
-                
-                Log::info('Notifications created for user: ' . $person->id);
-                
-            } catch (\Exception $e) {
-                Log::error('Failed to create notifications: ' . $e->getMessage());
-            }
+            $person = Person::find($request->person_id);
+            $club = Club::find($request->club_id);
+            $this->createWelcomeNotification($person, $club, $request->role);
 
-            $membership = DB::table('club_members')
-                ->join('persons', 'club_members.person_id', '=', 'persons.id')
-                ->join('clubs', 'club_members.club_id', '=', 'clubs.id')
-                ->where('club_members.id', $membershipId)
-                ->select(
-                    'club_members.*', 
-                    'persons.first_name', 
-                    'persons.last_name',
-                    'persons.avatar',
-                    'clubs.name as club_name',
-                    'clubs.logo as club_logo'
-                )
-                ->first();
-            
-            $membership->avatar_url = $membership->avatar ? url('storage/' . $membership->avatar) : null;
-            $membership->club_logo_url = $membership->club_logo ? url('storage/' . $membership->club_logo) : null;
+            DB::commit();
 
-            return response()->json([
-                'message' => 'Membre ajouté avec succès',
-                'membership' => $membership
-            ], 201);
-            
+            return response()->json(['message' => 'Membre ajouté avec succès'], 201);
+
         } catch (\Exception $e) {
-            Log::error('Error adding member: ' . $e->getMessage());
-            return response()->json([
-                'message' => 'Erreur lors de l\'ajout du membre',
-                'error' => $e->getMessage()
-            ], 500);
+            DB::rollBack();
+            Log::error('Error in Member store: ' . $e->getMessage());
+            return response()->json(['message' => 'Erreur serveur', 'error' => $e->getMessage()], 500);
         }
     }
 
@@ -693,6 +674,30 @@ class MemberController extends Controller
                 'message' => 'Erreur lors de la récupération de l\'adhésion',
                 'error' => $e->getMessage()
             ], 500);
+        }
+    }
+    
+    public function getPresidentByClub($clubId)
+    {
+        try {
+            $president = DB::table('club_members')
+                ->join('persons', 'club_members.person_id', '=', 'persons.id')
+                ->where('club_members.club_id', $clubId)
+                ->where('club_members.role', 'president')
+                ->where('club_members.status', 'active')
+                ->select(
+                    'club_members.id as membership_id',
+                    'persons.id as person_id',
+                    'persons.first_name',
+                    'persons.last_name',
+                    'persons.email'
+                )
+                ->first();
+ 
+            return response()->json($president);
+        } catch (\Exception $e) {
+            \Log::error('Error fetching club president: ' . $e->getMessage());
+            return response()->json(null);
         }
     }
 }
