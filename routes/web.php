@@ -11,18 +11,14 @@ use App\Http\Controllers\RequestController;
 use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\GoogleAuthController;
-use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Http\Request;
 use App\Models\Club_member;
 use Illuminate\Support\Facades\Log;
 use App\Http\Controllers\TwoFactorController;
 
-
-
-
 // ============================================
-// PUBLIC AUTH ROUTES
+// PUBLIC AUTH ROUTES (no auth required)
 // ============================================
 Route::post('/api/login',    [AuthController::class, 'login']);
 Route::post('/api/register', [AuthController::class, 'register']);
@@ -91,7 +87,7 @@ Route::middleware(['web', 'throttle:5,1'])->group(function () {
 });
 
 // ============================================
-// PUBLIC ROUTES
+// FULLY PUBLIC ROUTES (no auth at all)
 // ============================================
 Route::post('/api/public/persons', [PersonController::class, 'store']);
 Route::post('/api/public/members', [MemberController::class, 'store']);
@@ -102,7 +98,7 @@ Route::get('/api/clubs',                 [ClubController::class,  'index']);
 Route::get('/api/clubs/code/{code}',     [ClubController::class,  'showByCode']);
 Route::get('/api/clubs/{id}',            [ClubController::class,  'show']);
 Route::get('/api/clubs/{id}/statistics', [ClubController::class,  'statistics']);
-Route::get('/api/clubs/{id}/members',    [MemberController::class,'getByClub']);
+Route::get('/api/clubs/{id}/members',    [MemberController::class, 'getByClub']);
 
 Route::get('/api/events/upcoming/list',  [EventController::class, 'upcoming']);
 Route::get('/api/events/past/completed', [EventController::class, 'pastEvents']);
@@ -110,40 +106,41 @@ Route::get('/api/events/club/{clubId}',  [EventController::class, 'getByClub']);
 Route::get('/api/events',                [EventController::class, 'index']);
 Route::get('/api/events/{id}',           [EventController::class, 'show']);
 
-Route::get('/api/members',               [MemberController::class,'index']);
-Route::get('/api/members/{id}',          [MemberController::class,'show']);
-Route::get('/api/clubs/{clubId}/stats',  [MemberController::class,'getClubStats']);
+Route::get('/api/members',               [MemberController::class, 'index']);
+Route::get('/api/members/{id}',          [MemberController::class, 'show']);
+Route::get('/api/clubs/{clubId}/stats',  [MemberController::class, 'getClubStats']);
 
-Route::get('/api/tickets/qr/{qrCode}',  [TicketController::class,'showByQRCode']);
+Route::get('/api/tickets/qr/{qrCode}',   [TicketController::class, 'showByQRCode']);
 
 // ============================================
-// TICKET STATIC ROUTES
+// TICKET SCANNING ROUTES (auth required)
 // ============================================
 Route::middleware(['auth:web'])->group(function () {
-    Route::post('/api/tickets/scan-qr',                [ScanController::class,  'scanTicket']);
-    Route::post('/api/tickets/validate-qr',            [ScanController::class,  'validateQRCode']);
-    Route::get('/api/tickets/event/{eventId}/stats',   [ScanController::class,  'getEventScanStats']);
-    Route::get('/api/tickets/event/{eventId}/scanned', [ScanController::class,  'getScannedTickets']);
+    Route::post('/api/tickets/scan-qr',                [ScanController::class, 'scanTicket']);
+    Route::post('/api/tickets/validate-qr',            [ScanController::class, 'validateQRCode']);
+    Route::get('/api/tickets/event/{eventId}/stats',   [ScanController::class, 'getEventScanStats']);
+    Route::get('/api/tickets/event/{eventId}/scanned', [ScanController::class, 'getScannedTickets']);
     Route::get('/api/tickets/{ticketId}/download-pdf', [EventController::class, 'downloadTicketPdf']);
 });
 
 // ============================================
-// PROTECTED ROUTES — auth:web (session cookie)
+// PROTECTED ROUTES — require authentication
 // ============================================
 Route::middleware(['auth:web'])->prefix('/api')->group(function () {
 
-    // Auth
+    // ----- PROFILE & SETTINGS (any authenticated user) -----
     Route::post('/logout',          [AuthController::class, 'logout']);
     Route::get('/profile',          [AuthController::class, 'profile']);
     Route::post('/profile',         [AuthController::class, 'updateProfile']);
     Route::put('/profile',          [AuthController::class, 'updateProfile']);
     Route::post('/change-password', [AuthController::class, 'changePassword']);
+    Route::post('/me/avatar',       [PersonController::class, 'updateAvatar']);
 
-    // Google
+    // ----- GOOGLE ACCOUNT LINKING (any authenticated user) -----
     Route::get('/google/status',  [GoogleAuthController::class, 'checkGoogleStatus']);
     Route::post('/google/unlink', [GoogleAuthController::class, 'unlinkGoogle']);
 
-    // 2FA
+    // ----- 2FA (any authenticated user) -----
     Route::prefix('2fa')->group(function () {
         Route::middleware('throttle:10,1')->group(function () {
             Route::post('/setup',   [TwoFactorController::class, 'setup']);
@@ -155,63 +152,95 @@ Route::middleware(['auth:web'])->prefix('/api')->group(function () {
         });
     });
 
-    // Clubs
-    Route::get('/my-club',                    [ClubController::class, 'getMyClub']);
-    Route::get('/my-club-info',               [ClubController::class, 'getMyClubInfo']);
-    Route::post('/clubs',                     [ClubController::class, 'store']);
-    Route::put('/clubs/{id}',                 [ClubController::class, 'update']);
-    Route::delete('/clubs/{id}',              [ClubController::class, 'destroy']);
-    Route::patch('/clubs/{id}/members/count', [ClubController::class, 'updateMemberCounts']);
+    // ----- PERSON SEARCH (any authenticated user) -----
+    Route::get('/persons/search/query', [PersonController::class, 'search']);
 
-    // Events
-    Route::post('/events',                          [EventController::class, 'store']);
-    Route::put('/events/{id}',                      [EventController::class, 'update']);
-    Route::delete('/events/{id}',                   [EventController::class, 'destroy']);
-    Route::patch('/events/{id}/status',             [EventController::class, 'updateStatus']);
-    Route::post('/events/{id}/recap',               [EventController::class, 'addRecap']);
-    Route::post('/events/{id}/assign-tickets',      [EventController::class, 'assignTicketsToSelected']); // ← NEW
-
-    // Members
-    Route::get('/my-club-membership',       [MemberController::class, 'getMyClubMembership']);
-    Route::get('/persons/{personId}/clubs', [MemberController::class, 'getPersonClubs']);
-    Route::post('/members',                 [MemberController::class, 'store']);
-    Route::put('/members/{id}',             [MemberController::class, 'update']);
-    Route::delete('/members/{id}',          [MemberController::class, 'destroy']);
-
-    // Persons
-    Route::get('/persons/search/query',     [PersonController::class, 'search']);
-    Route::get('/persons',                  [PersonController::class, 'index']);
-    Route::post('/persons',                 [PersonController::class, 'store']);
-    Route::get('/persons/{id}',             [PersonController::class, 'show']);
-    Route::put('/persons/{id}',             [PersonController::class, 'update']);
-    Route::delete('/persons/{id}',          [PersonController::class, 'destroy']);
-    Route::post('/persons/{id}/reactivate', [PersonController::class, 'reactivate']);
-    Route::put('/persons/{id}/password',    [PersonController::class, 'updatePassword']);
-    Route::post('/me/avatar',               [PersonController::class, 'updateAvatar']);
-
-    // Tickets
-    Route::get('/tickets',              [TicketController::class, 'index']);
-    Route::post('/tickets',             [TicketController::class, 'store']);
-    Route::get('/tickets/{id}',         [TicketController::class, 'show']);
-    Route::post('/tickets/{id}/scan',   [TicketController::class, 'scan']);
-    Route::post('/tickets/{id}/cancel', [TicketController::class, 'cancel']);
-    Route::get('/events/{eventId}/tickets/stats', [TicketController::class, 'getEventStats']);
-
-    // Requests
-    Route::get('/requests',                      [RequestController::class, 'index']);
-    Route::post('/requests',                     [RequestController::class, 'store']);
-    Route::get('/requests/{id}',                 [RequestController::class, 'show']);
-    Route::put('/requests/{id}',                 [RequestController::class, 'update']);
-    Route::delete('/requests/{id}',              [RequestController::class, 'destroy']);
-    Route::post('/requests/{id}/validate',       [RequestController::class, 'validate']);
-    Route::get('/clubs/{clubId}/requests/stats', [RequestController::class, 'getClubStats']);
-
-    // Notifications
+    // ----- NOTIFICATIONS (any authenticated user) -----
     Route::prefix('notifications')->group(function () {
         Route::get('/',             [NotificationController::class, 'index']);
         Route::get('/unread-count', [NotificationController::class, 'getUnreadCount']);
         Route::put('/read-all',     [NotificationController::class, 'markAllAsRead']);
         Route::put('/{id}/read',    [NotificationController::class, 'markAsRead']);
         Route::delete('/{id}',      [NotificationController::class, 'destroy']);
+    });
+
+    // ============================================
+    // ADMIN ONLY (global role = admin)
+    // ============================================
+    Route::middleware(['role:admin'])->group(function () {
+        // Club management
+        Route::post('/clubs',                     [ClubController::class, 'store']);
+        Route::put('/clubs/{id}',                 [ClubController::class, 'update']);
+        Route::delete('/clubs/{id}',              [ClubController::class, 'destroy']);
+        Route::patch('/clubs/{id}/members/count', [ClubController::class, 'updateMemberCounts']);
+
+        // Person management (full CRUD) — admin only
+        Route::get('/persons',                  [PersonController::class, 'index']);
+        Route::post('/persons',                 [PersonController::class, 'store']);
+        Route::get('/persons/{id}',             [PersonController::class, 'show']);
+        Route::put('/persons/{id}',             [PersonController::class, 'update']);
+        Route::delete('/persons/{id}',          [PersonController::class, 'destroy']);
+        Route::post('/persons/{id}/reactivate', [PersonController::class, 'reactivate']);
+        Route::put('/persons/{id}/password',    [PersonController::class, 'updatePassword']);
+    });
+
+    // ============================================
+    // CLUB MEMBER ROUTES (any club member: president, board, member)
+    // ============================================
+    Route::middleware(['club_role:president,board,member'])->group(function () {
+        Route::get('/my-club',            [ClubController::class,  'getMyClub']);
+        Route::get('/my-club-info',       [ClubController::class,  'getMyClubInfo']);
+        Route::get('/my-club-membership', [MemberController::class, 'getMyClubMembership']);
+        Route::get('/persons/{personId}/clubs', [MemberController::class, 'getPersonClubs']);
+    });
+
+    // ============================================
+    // PRESIDENT + BOARD ROUTES
+    // ============================================
+    Route::middleware(['club_role:president,board'])->group(function () {
+        Route::post('/events',                     [EventController::class, 'store']);
+        Route::put('/events/{id}',                 [EventController::class, 'update']);
+        Route::post('/events/{id}/assign-tickets', [EventController::class, 'assignTicketsToSelected']);
+        Route::post('/events/{id}/recap',          [EventController::class, 'addRecap']);
+
+        Route::get('/tickets',                        [TicketController::class, 'index']);
+        Route::post('/tickets',                       [TicketController::class, 'store']);
+        Route::get('/tickets/{id}',                   [TicketController::class, 'show']);
+        Route::post('/tickets/{id}/scan',             [TicketController::class, 'scan']);
+        Route::post('/tickets/{id}/cancel',           [TicketController::class, 'cancel']);
+        Route::get('/events/{eventId}/tickets/stats', [TicketController::class, 'getEventStats']);
+
+        Route::get('/requests',                      [RequestController::class, 'index']);
+        Route::get('/requests/{id}',                 [RequestController::class, 'show']);
+        Route::get('/clubs/{clubId}/requests/stats', [RequestController::class, 'getClubStats']);
+    });
+
+    // ============================================
+    // PRESIDENT ONLY
+    // ============================================
+    Route::middleware(['club_role:president'])->group(function () {
+        // President creates persons (members & board) — NEW ROUTE
+        Route::post('/persons/new-member', [PersonController::class, 'store']);
+
+        // Member management
+        Route::post('/members',        [MemberController::class, 'store']);
+        Route::put('/members/{id}',    [MemberController::class, 'update']);
+        Route::delete('/members/{id}', [MemberController::class, 'destroy']);
+
+        // Event management
+        Route::delete('/events/{id}',       [EventController::class, 'destroy']);
+        Route::patch('/events/{id}/status', [EventController::class, 'updateStatus']);
+
+        // Request validation
+        Route::post('/requests/{id}/validate', [RequestController::class, 'validate']);
+        Route::put('/requests/{id}',           [RequestController::class, 'update']);
+        Route::delete('/requests/{id}',        [RequestController::class, 'destroy']);
+    });
+
+    // ============================================
+    // BOARD ONLY
+    // ============================================
+    Route::middleware(['club_role:board'])->group(function () {
+        Route::post('/requests', [RequestController::class, 'store']);
     });
 });

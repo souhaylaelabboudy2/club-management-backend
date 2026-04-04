@@ -3,6 +3,8 @@
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use App\Http\Middleware\RoleMiddleware;
+use App\Http\Middleware\ClubRoleMiddleware;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -22,6 +24,12 @@ return Application::configure(basePath: dirname(__DIR__))
         // Exclude API routes from CSRF (we're using session cookies instead)
         $middleware->validateCsrfTokens(except: [
             'api/*',
+        ]);
+        
+        // Register custom middleware aliases
+        $middleware->alias([
+            'role' => RoleMiddleware::class,
+            'club_role' => ClubRoleMiddleware::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
