@@ -389,25 +389,22 @@ class EventController extends Controller
 
     // ─────────────────────────────────────────────────────────────
     //  PDF TICKET DOWNLOAD  (by ticket_id from notification data)
+    //  ✅ PUBLIC — pas besoin d'auth(), accessible depuis l'email
     // ─────────────────────────────────────────────────────────────
 
     public function downloadTicketPdf($ticketId)
     {
         try {
-            $user = auth()->user();
-
-            // Load ticket from tickets table — must belong to this user
-            $ticket = DB::table('tickets')
-                ->where('id', $ticketId)
-                ->where('person_id', $user->id)
-                ->first();
+            // ✅ On cherche le ticket directement sans auth()
+            $ticket = DB::table('tickets')->where('id', $ticketId)->first();
 
             if (!$ticket) {
                 return response()->json(['message' => 'Billet non trouvé'], 404);
             }
 
-            $event = DB::table('events')->where('id', $ticket->event_id)->first();
-            $club  = $event ? DB::table('clubs')->where('id', $event->club_id)->first() : null;
+            $event  = DB::table('events')->where('id', $ticket->event_id)->first();
+            $club   = $event ? DB::table('clubs')->where('id', $event->club_id)->first() : null;
+            $person = DB::table('persons')->where('id', $ticket->person_id)->first();
 
             // ── QR code ──
             $ticketCode = $ticket->qr_code;
@@ -415,7 +412,7 @@ class EventController extends Controller
                 'ticket_code' => $ticketCode,
                 'ticket_id'   => $ticket->id,
                 'event_id'    => $ticket->event_id,
-                'person_id'   => $user->id,
+                'person_id'   => $ticket->person_id,
             ]);
             $qrSvg        = QrCode::format('svg')->size(200)->errorCorrection('H')->generate($qrContent);
             $qrCodeBase64 = base64_encode($qrSvg);
@@ -442,8 +439,8 @@ class EventController extends Controller
                 'event_date'     => $rawDate          ?? now(),
                 'event_location' => $event->location  ?? 'À confirmer',
                 'club_name'      => $club->name       ?? 'Club',
-                'first_name'     => $user->first_name,
-                'last_name'      => $user->last_name,
+                'first_name'     => $person->first_name ?? '',
+                'last_name'      => $person->last_name  ?? '',
             ];
 
             $pdf = Pdf::loadView('pdf.Ticket', [
@@ -511,117 +508,120 @@ class EventController extends Controller
             return response()->json(['message' => 'Error fetching events', 'error' => $e->getMessage()], 500);
         }
     }
+
     // ─────────────────────────────────────────────────────────────
     //  ASSIGN TICKETS TO SELECTED MEMBERS  (manual, post-payment)
     // ─────────────────────────────────────────────────────────────
-public function assignTicketsToSelected(Request $request, $eventId)
-{
-    try {
-        $event = DB::table('events')->where('id', $eventId)->first();
 
-        if (!$event) {
-            return response()->json(['message' => 'Événement non trouvé'], 404);
-        }
+    public function assignTicketsToSelected(Request $request, $eventId)
+    {
+        try {
+            $event = DB::table('events')->where('id', $eventId)->first();
 
-        $request->validate([
-            'person_ids'   => 'required|array|min:1',
-            'person_ids.*' => 'integer',
-        ]);
+            if (!$event) {
+                return response()->json(['message' => 'Événement non trouvé'], 404);
+            }
 
-        $personIds = array_map('intval', $request->input('person_ids', []));
-
-        $club = DB::table('clubs')->where('id', $event->club_id)->first();
-
-        $eventDate = \Carbon\Carbon::parse($event->event_date)
-            ->locale('fr')
-            ->isoFormat('dddd D MMMM YYYY [à] HH[h]mm');
-
-        $assigned = 0;
-        $skipped  = 0;
-
-        foreach ($personIds as $personId) {
-
-            $alreadyExists = DB::table('tickets')
-                ->where('event_id', $eventId)
-                ->where('person_id', $personId)
-                ->whereIn('status', ['valid', 'scanned'])
-                ->exists();
-
-            if ($alreadyExists) { $skipped++; continue; }
-
-            $person = DB::table('persons')->where('id', $personId)->first();
-            if (!$person) { $skipped++; continue; }
-
-            do {
-                $ticketCode = strtoupper(Str::random(4)) . '-' . strtoupper(Str::random(4));
-            } while (DB::table('tickets')->where('qr_code', $ticketCode)->exists());
-
-            $ticketId = DB::table('tickets')->insertGetId([
-                'event_id'       => $event->id,
-                'person_id'      => $personId,
-                'qr_code'        => $ticketCode,
-                'status'         => 'valid',
-                'auto_generated' => 0,
-                'generated_by'   => auth()->id(),
-                'generated_at'   => now(),
-                'sent_at'        => null,
-                'scanned_at'     => null,
-                'scanned_by'     => null,
+            $request->validate([
+                'person_ids'   => 'required|array|min:1',
+                'person_ids.*' => 'integer',
             ]);
-DB::table('notifications')->insert([
-    'person_id'      => $personId,
-    'type'           => 'event_ticket',
-    'title'          => '🎟️ Votre billet : ' . $event->title,
-    'message'        => sprintf(
-        "Bonjour %s,\n\nVous avez été inscrit(e) à \"%s\" organisé par %s.\n\n📅 %s\n📍 %s\n\nCode billet : %s\n\nCliquez sur « Télécharger » pour obtenir votre billet PDF.",
-        $person->first_name,
-        $event->title,
-        $club->name ?? 'votre club',
-        $eventDate,
-        $event->location ?? 'Lieu à confirmer',
-        $ticketCode
-    ),
-    'dashboard_link' => null,
-    'data'           => json_encode([
-        'ticket_id'   => $ticketId,
-        'ticket_code' => $ticketCode,
-        'event_id'    => $event->id,
-        'event_title' => $event->title,
-        'event_date'  => $event->event_date,
-        'location'    => $event->location,
-        'club_id'     => $event->club_id,
-        'club_name'   => $club->name ?? '',
-        'club_logo'   => $club->logo ?? null,
-        'member_name' => $person->first_name . ' ' . $person->last_name,
-    ]),
-    'read'           => false,
-    'email_sent'     => false,
-    'created_at'     => now(),
-    // 'updated_at' removed — column doesn't exist in notifications table
-]);
 
-            $assigned++;
-            Log::info('Manual ticket assigned: person=' . $personId . ' event=' . $eventId . ' ticket_id=' . $ticketId);
+            $personIds = array_map('intval', $request->input('person_ids', []));
+
+            $club = DB::table('clubs')->where('id', $event->club_id)->first();
+
+            $eventDate = \Carbon\Carbon::parse($event->event_date)
+                ->locale('fr')
+                ->isoFormat('dddd D MMMM YYYY [à] HH[h]mm');
+
+            $assigned = 0;
+            $skipped  = 0;
+
+            foreach ($personIds as $personId) {
+
+                $alreadyExists = DB::table('tickets')
+                    ->where('event_id', $eventId)
+                    ->where('person_id', $personId)
+                    ->whereIn('status', ['valid', 'scanned'])
+                    ->exists();
+
+                if ($alreadyExists) { $skipped++; continue; }
+
+                $person = DB::table('persons')->where('id', $personId)->first();
+                if (!$person) { $skipped++; continue; }
+
+                do {
+                    $ticketCode = strtoupper(Str::random(4)) . '-' . strtoupper(Str::random(4));
+                } while (DB::table('tickets')->where('qr_code', $ticketCode)->exists());
+
+                $ticketId = DB::table('tickets')->insertGetId([
+                    'event_id'       => $event->id,
+                    'person_id'      => $personId,
+                    'qr_code'        => $ticketCode,
+                    'status'         => 'valid',
+                    'auto_generated' => 0,
+                    'generated_by'   => auth()->id(),
+                    'generated_at'   => now(),
+                    'sent_at'        => null,
+                    'scanned_at'     => null,
+                    'scanned_by'     => null,
+                ]);
+
+                DB::table('notifications')->insert([
+                    'person_id'      => $personId,
+                    'type'           => 'event_ticket',
+                    'title'          => '🎟️ Votre billet : ' . $event->title,
+                    'message'        => sprintf(
+                        "Bonjour %s,\n\nVous avez été inscrit(e) à \"%s\" organisé par %s.\n\n📅 %s\n📍 %s\n\nCode billet : %s\n\nCliquez sur « Télécharger » pour obtenir votre billet PDF.",
+                        $person->first_name,
+                        $event->title,
+                        $club->name ?? 'votre club',
+                        $eventDate,
+                        $event->location ?? 'Lieu à confirmer',
+                        $ticketCode
+                    ),
+                    'dashboard_link' => null,
+                    'data'           => json_encode([
+                        'ticket_id'   => $ticketId,
+                        'ticket_code' => $ticketCode,
+                        'event_id'    => $event->id,
+                        'event_title' => $event->title,
+                        'event_date'  => $event->event_date,
+                        'location'    => $event->location,
+                        'club_id'     => $event->club_id,
+                        'club_name'   => $club->name ?? '',
+                        'club_logo'   => $club->logo ?? null,
+                        'member_name' => $person->first_name . ' ' . $person->last_name,
+                    ]),
+                    'read'           => false,
+                    'email_sent'     => false,
+                    'created_at'     => now(),
+                    // 'updated_at' removed — column doesn't exist in notifications table
+                ]);
+
+                $assigned++;
+                Log::info('Manual ticket assigned: person=' . $personId . ' event=' . $eventId . ' ticket_id=' . $ticketId);
+            }
+
+            return response()->json([
+                'message'        => $assigned . ' billet(s) assigné(s) avec succès.',
+                'assigned_count' => $assigned,
+                'skipped_count'  => $skipped,
+            ], 200);
+
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return response()->json([
+                'message' => 'Erreur de validation',
+                'errors'  => $e->errors(),
+            ], 422);
+
+        } catch (\Exception $e) {
+            Log::error('Error in assignTicketsToSelected: ' . $e->getMessage());
+            return response()->json([
+                'message' => 'Erreur lors de l\'assignation des billets',
+                'error'   => $e->getMessage(),
+            ], 500);
         }
-
-        return response()->json([
-            'message'        => $assigned . ' billet(s) assigné(s) avec succès.',
-            'assigned_count' => $assigned,
-            'skipped_count'  => $skipped,
-        ], 200);
-
-    } catch (\Illuminate\Validation\ValidationException $e) {
-        return response()->json([
-            'message' => 'Erreur de validation',
-            'errors'  => $e->errors(),
-        ], 422);
-
-    } catch (\Exception $e) {
-        Log::error('Error in assignTicketsToSelected: ' . $e->getMessage());
-        return response()->json([
-            'message' => 'Erreur lors de l\'assignation des billets',
-            'error'   => $e->getMessage(),
-        ], 500);
     }
-}
 }
