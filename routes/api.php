@@ -12,6 +12,7 @@ use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\GoogleAuthController;
 use App\Http\Controllers\TwoFactorController;
+use App\Http\Controllers\ForgotPasswordController;
 use App\Models\Club_member;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -22,6 +23,11 @@ use Illuminate\Support\Facades\Log;
 // ============================================
 Route::post('/login',    [AuthController::class, 'login']);
 Route::post('/register', [AuthController::class, 'register']);
+
+// Forgot Password Routes
+Route::post('/auth/forgot-password', [ForgotPasswordController::class, 'sendResetLink']);
+Route::get('/auth/reset-password/{token}', [ForgotPasswordController::class, 'validateToken']);
+Route::post('/auth/reset-password/{token}', [ForgotPasswordController::class, 'resetPassword']);
 
 // ============================================
 // PUBLIC 2FA VERIFY ROUTE
